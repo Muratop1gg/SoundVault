@@ -142,6 +142,7 @@ export function UploadModal({ open, onClose, onUploaded }: UploadModalProps) {
         body: formData,
       })
       setProgress(90)
+      console.log(res)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Ошибка загрузки")
       setProgress(100)

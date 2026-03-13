@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useCallback } from "react"
+import { useEffect, useRef, useCallback, useState } from "react"
 import { usePlayer } from "@/components/player/player-context"
 import type { Track } from "@/lib/types"
 
@@ -10,99 +10,120 @@ interface WaveformVisualizerProps {
   audioBuffer: AudioBuffer | null
 }
 
-const BAR_COUNT = 120
 const BAR_GAP = 2
+const WINDOW_BARS = 50
+const PULSE_MAG = 0.08
+const SMOOTH_STEP = 1 // пиксель за кадр
 
 export function WaveformVisualizer({ track, shareToken, audioBuffer }: WaveformVisualizerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const { currentTrack, isPlaying, currentTime, duration, togglePlay, seek } = usePlayer()
+  const { currentTrack, currentTime, duration, togglePlay, seek } = usePlayer()
   const isActive = currentTrack?.id === track.id
-  const animFrameRef = useRef<number>(0)
+  const animRef = useRef<number>(0)
+  const [peaks, setPeaks] = useState<number[]>([])
+  const lastHeightsRef = useRef<number[]>([])
+  const offsetRef = useRef(0) // текущий сдвиг в пикселях
 
-  // Build peak data from AudioBuffer or generate a placeholder
-  const getPeaks = useCallback((): number[] => {
-    if (audioBuffer) {
-      const channelData = audioBuffer.getChannelData(0)
-      const blockSize = Math.floor(channelData.length / BAR_COUNT)
-      return Array.from({ length: BAR_COUNT }, (_, i) => {
-        const start = i * blockSize
-        let max = 0
-        for (let j = start; j < start + blockSize; j++) {
-          const abs = Math.abs(channelData[j])
-          if (abs > max) max = abs
-        }
-        return Math.max(0.04, max)
-      })
-    }
-    // Placeholder pseudo-waveform
-    return Array.from({ length: BAR_COUNT }, (_, i) => {
-      const base = Math.sin(i * 0.18) * 0.3 + 0.5
-      // Use index as deterministic seed to avoid re-renders
-      const pseudo = ((i * 2654435761) >>> 0) / 0xffffffff
-      return Math.max(0.05, Math.min(1, base + (pseudo * 0.3 - 0.15)))
+  // Генерация пиков для всего трека
+  useEffect(() => {
+    if (!audioBuffer || duration === 0) return
+    const channelData = audioBuffer.getChannelData(0)
+    const peakCount = Math.max(Math.floor(duration * 60), 200)
+    const blockSize = Math.floor(channelData.length / peakCount)
+    const newPeaks = Array.from({ length: peakCount }, (_, i) => {
+      let max = 0
+      for (let j = i * blockSize; j < (i + 1) * blockSize; j++) {
+        const abs = Math.abs(channelData[j])
+        if (abs > max) max = abs
+      }
+      return Math.max(0.02, max)
     })
-  }, [audioBuffer])
+    setPeaks(newPeaks)
+    lastHeightsRef.current = new Array(newPeaks.length).fill(0)
+  }, [audioBuffer, duration])
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas || !peaks.length || !isActive || duration === 0) return
     const ctx = canvas.getContext("2d")
     if (!ctx) return
 
     const { width, height } = canvas
     ctx.clearRect(0, 0, width, height)
 
-    const peakData = getPeaks()
-    const barWidth = (width - BAR_GAP * (BAR_COUNT - 1)) / BAR_COUNT
-    const progressFraction = isActive && duration > 0 ? currentTime / duration : 0
+    const totalPeaks = peaks.length
+    const pixelsPerPeak = width / WINDOW_BARS
+    const barsInWindow = Math.min(WINDOW_BARS, totalPeaks)
+    const centerX = width / 2
 
-    peakData.forEach((peak, i) => {
-      const x = i * (barWidth + BAR_GAP)
-      const barH = Math.max(4, peak * (height * 0.88))
+    // Вычисляем целевой offset, но двигаемся к нему на 1 пиксель за кадр
+    const targetOffset = -(currentTime / duration * totalPeaks - totalPeaks / 2) * pixelsPerPeak
+    if (offsetRef.current < targetOffset) {
+      offsetRef.current = Math.min(offsetRef.current + SMOOTH_STEP, targetOffset)
+    } else if (offsetRef.current > targetOffset) {
+      offsetRef.current = Math.max(offsetRef.current - SMOOTH_STEP, targetOffset)
+    }
+
+    const lastHeights = lastHeightsRef.current
+    const t = 0.15
+
+    for (let i = 0; i < totalPeaks; i++) {
+      const peak = peaks[i]
+      const pulse = 1 + Math.sin(performance.now() * 0.005 + i) * PULSE_MAG
+      const targetH = peak * height * 0.85 * pulse
+      lastHeights[i] += (targetH - lastHeights[i]) * t
+      const barH = lastHeights[i]
+
+      const x = centerX + (i - totalPeaks / 2) * pixelsPerPeak + offsetRef.current
+      if (x + pixelsPerPeak < 0 || x > width) continue
+
       const y = (height - barH) / 2
-      const played = i / BAR_COUNT <= progressFraction
+      const barWidth = Math.max(1, pixelsPerPeak - BAR_GAP)
+      const r = Math.min(barWidth / 2, 2)
 
-      // Gradient-ish look: played bars bright, future bars dim
-      ctx.fillStyle = played
-        ? "oklch(0.72 0.19 230)"
-        : "oklch(0.28 0.01 265)"
+      ctx.fillStyle = i <= currentTime / duration * totalPeaks
+        ? "rgba(124, 58, 237, 0.9)"
+        : "rgba(200,200,200,0.3)"
 
-      const r = Math.min(barWidth / 2, 3)
       ctx.beginPath()
       ctx.roundRect(x, y, barWidth, barH, r)
       ctx.fill()
-    })
-  }, [getPeaks, isActive, currentTime, duration])
+    }
+
+    lastHeightsRef.current = lastHeights
+  }, [peaks, currentTime, duration, isActive])
 
   useEffect(() => {
     let running = true
-    function loop() {
+    const loop = () => {
       if (!running) return
       draw()
-      animFrameRef.current = requestAnimationFrame(loop)
+      animRef.current = requestAnimationFrame(loop)
     }
     loop()
     return () => {
       running = false
-      cancelAnimationFrame(animFrameRef.current)
+      cancelAnimationFrame(animRef.current)
     }
   }, [draw])
 
-  function handleClick(e: React.MouseEvent<HTMLCanvasElement>) {
+  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas || duration === 0) return
 
-    if (!isActive) {
-      // Start playback on this track
-      togglePlay(track, shareToken)
-      return
-    }
+    const rect = canvas.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const centerX = canvas.width / 2
+    const pixelsPerPeak = canvas.width / WINDOW_BARS
+    const totalPeaks = peaks.length
+    const currentPeakIndex = currentTime / duration * totalPeaks
 
-    if (duration > 0) {
-      const rect = canvas.getBoundingClientRect()
-      const frac = (e.clientX - rect.left) / rect.width
-      seek(frac * duration)
-    }
+    const barsOffset = (x - centerX) / pixelsPerPeak
+    const newIndex = Math.min(Math.max(0, Math.floor(currentPeakIndex + barsOffset)), totalPeaks - 1)
+    const newTime = (newIndex / totalPeaks) * duration
+    seek(newTime)
+
+    if (!isActive) togglePlay(track, shareToken)
   }
 
   return (

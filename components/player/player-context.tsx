@@ -18,16 +18,19 @@ interface PlayerState {
   currentTime: number
   duration: number
   volume: number
+  isLoading: boolean
+  error: string | null
 }
 
 interface PlayerContextValue extends PlayerState {
+  audioRef: React.RefObject<HTMLAudioElement | null>
   play: (track: Track, shareToken?: string) => void
   pause: () => void
   resume: () => void
   togglePlay: (track: Track, shareToken?: string) => void
   seek: (time: number) => void
   setVolume: (vol: number) => void
-  audioRef: React.RefObject<HTMLAudioElement | null>
+  retry: () => void
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null)
@@ -41,91 +44,97 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     currentTime: 0,
     duration: 0,
     volume: 0.8,
+    isLoading: false,
+    error: null,
   })
 
   useEffect(() => {
     const audio = new Audio()
     audio.volume = 0.8
+    audio.preload = "metadata"
     audioRef.current = audio
 
-    const onTimeUpdate = () =>
-      setState((s) => ({ ...s, currentTime: audio.currentTime }))
-    const onDurationChange = () =>
-      setState((s) => ({ ...s, duration: audio.duration || 0 }))
+    const onTimeUpdate = () => setState((s) => ({ ...s, currentTime: audio.currentTime }))
+    const onDurationChange = () => setState((s) => ({ ...s, duration: audio.duration || 0 }))
     const onEnded = () => setState((s) => ({ ...s, isPlaying: false }))
+    const onLoadStart = () => setState((s) => ({ ...s, isLoading: true, error: null }))
+    const onCanPlay = () => setState((s) => ({ ...s, isLoading: false }))
+    const onError = () => setState((s) => ({ ...s, isLoading: false, isPlaying: false, error: audio.error?.message || "Failed to load audio" }))
 
     audio.addEventListener("timeupdate", onTimeUpdate)
     audio.addEventListener("durationchange", onDurationChange)
     audio.addEventListener("ended", onEnded)
+    audio.addEventListener("loadstart", onLoadStart)
+    audio.addEventListener("canplay", onCanPlay)
+    audio.addEventListener("error", onError)
 
     return () => {
       audio.pause()
+      audio.src = ""
       audio.removeEventListener("timeupdate", onTimeUpdate)
       audio.removeEventListener("durationchange", onDurationChange)
       audio.removeEventListener("ended", onEnded)
+      audio.removeEventListener("loadstart", onLoadStart)
+      audio.removeEventListener("canplay", onCanPlay)
+      audio.removeEventListener("error", onError)
     }
   }, [])
 
   const play = useCallback((track: Track, shareToken?: string) => {
     const audio = audioRef.current
     if (!audio) return
-
     const tokenParam = shareToken ? `?token=${shareToken}` : ""
-    const url = `/api/tracks/${track.id}/stream${tokenParam}`
-
-    audio.pause()
-    audio.src = url
-    audio.load()
-    audio.play().catch(() => {})
+    audio.src = `/api/tracks/${track.id}/stream${tokenParam}`
+    audio.play().catch(() => { })
     setState((s) => ({
       ...s,
       currentTrack: track,
       shareToken,
       isPlaying: true,
       currentTime: 0,
-      duration: 0,
+      duration: audio.duration || 0,
+      isLoading: false,
+      error: null,
     }))
   }, [])
 
-  const pause = useCallback(() => {
-    audioRef.current?.pause()
-    setState((s) => ({ ...s, isPlaying: false }))
-  }, [])
-
-  const resume = useCallback(() => {
-    audioRef.current?.play().catch(() => {})
-    setState((s) => ({ ...s, isPlaying: true }))
-  }, [])
+  const pause = useCallback(() => { audioRef.current?.pause(); setState((s) => ({ ...s, isPlaying: false })) }, [])
+  const resume = useCallback(() => { audioRef.current?.play().catch(() => { }); setState((s) => ({ ...s, isPlaying: true })) }, [])
 
   const togglePlay = useCallback(
     (track: Track, shareToken?: string) => {
       if (state.currentTrack?.id === track.id) {
-        if (state.isPlaying) pause()
-        else resume()
-      } else {
-        play(track, shareToken)
-      }
+        state.isPlaying ? pause() : resume()
+      } else play(track, shareToken)
     },
-    [state.currentTrack, state.isPlaying, play, pause, resume]
+    [state.currentTrack?.id, state.isPlaying, play, pause, resume]
   )
 
   const seek = useCallback((time: number) => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = time
-      setState((s) => ({ ...s, currentTime: time }))
-    }
+    if (audioRef.current) audioRef.current.currentTime = time
+    setState((s) => ({ ...s, currentTime: time }))
   }, [])
 
   const setVolume = useCallback((vol: number) => {
-    if (audioRef.current) {
-      audioRef.current.volume = vol
-      setState((s) => ({ ...s, volume: vol }))
-    }
+    if (audioRef.current) audioRef.current.volume = vol
+    setState((s) => ({ ...s, volume: vol }))
   }, [])
+
+  const retry = useCallback(() => { if (audioRef.current) audioRef.current.play().catch(() => { }); setState((s) => ({ ...s, isPlaying: true })) }, [])
 
   return (
     <PlayerContext.Provider
-      value={{ ...state, play, pause, resume, togglePlay, seek, setVolume, audioRef }}
+      value={{
+        ...state,
+        audioRef,
+        play,
+        pause,
+        resume,
+        togglePlay,
+        seek,
+        setVolume,
+        retry,
+      }}
     >
       {children}
     </PlayerContext.Provider>

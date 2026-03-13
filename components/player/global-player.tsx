@@ -9,12 +9,26 @@ import {
   Volume2,
   VolumeX,
   Music2,
+  Loader2,
+  AlertCircle,
 } from "lucide-react"
 import { formatDuration } from "@/lib/utils"
 
 export function GlobalPlayer() {
-  const { currentTrack, isPlaying, currentTime, duration, volume, pause, resume, seek, setVolume } =
-    usePlayer()
+  const {
+    currentTrack,
+    isPlaying,
+    currentTime,
+    duration,
+    volume,
+    isLoading,
+    error,
+    pause,
+    resume,
+    seek,
+    setVolume,
+    retry,
+  } = usePlayer()
 
   if (!currentTrack) return null
 
@@ -37,15 +51,34 @@ export function GlobalPlayer() {
         {/* Controls */}
         <div className="flex-1 flex flex-col items-center gap-1">
           <div className="flex items-center gap-2">
-            <Button
-              size="icon"
-              variant="ghost"
-              className="rounded-full w-9 h-9 text-primary hover:bg-primary/10"
-              onClick={isPlaying ? pause : resume}
-              aria-label={isPlaying ? "Пауза" : "Воспроизвести"}
-            >
-              {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
-            </Button>
+            {error ? (
+              <Button
+                size="icon"
+                variant="ghost"
+                className="rounded-full w-9 h-9 text-destructive hover:bg-destructive/10"
+                onClick={retry}
+                title={error}
+              >
+                <AlertCircle className="w-5 h-5" />
+              </Button>
+            ) : (
+              <Button
+                size="icon"
+                variant="ghost"
+                className="rounded-full w-9 h-9 text-primary hover:bg-primary/10"
+                onClick={isPlaying ? pause : resume}
+                disabled={isLoading}
+                aria-label={isPlaying ? "Пауза" : "Воспроизвести"}
+              >
+                {isLoading ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : isPlaying ? (
+                  <Pause className="w-5 h-5 fill-current" />
+                ) : (
+                  <Play className="w-5 h-5 fill-current" />
+                )}
+              </Button>
+            )}
           </div>
           <div className="w-full flex items-center gap-2">
             <span className="text-xs text-muted-foreground tabular-nums w-10 text-right">
@@ -59,6 +92,7 @@ export function GlobalPlayer() {
                 step={0.1}
                 onValueChange={([v]) => seek((v / 100) * duration)}
                 className="cursor-pointer"
+                disabled={!duration || isLoading || !!error}
                 aria-label="Прогресс воспроизведения"
               />
             </div>

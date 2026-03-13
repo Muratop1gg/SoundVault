@@ -135,7 +135,7 @@ export function UploadModal({ open, onClose, onUploaded }: UploadModalProps) {
     if (duration) formData.append("duration", String(duration))
 
     setProgress(40)
-
+    console.log(formData)
     try {
       const res = await fetch("/api/tracks/upload", {
         method: "POST",
